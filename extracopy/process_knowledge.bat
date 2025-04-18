@@ -1,7 +1,8 @@
-@echo on
+@echo off
 setlocal EnableDelayedExpansion
+
 :: Set variables
-set "PROJECT_DIR=D:\mcp server\mcp_server"
+set "PROJECT_DIR=D:\mcpserver\mcp_server"
 set "INPUT_DIR=%PROJECT_DIR%\data\inputs"
 set "SACRED_TEXTS_DIR=%PROJECT_DIR%\sacred_texts\Dynamic_Inputs"
 set "MODULES_DIR=%PROJECT_DIR%\modules"
@@ -20,24 +21,43 @@ set "SADHANA_DIR=%PROJECT_DIR%\data\sadhana_books"
 set "VENV_DIR=%PROJECT_DIR%\venv"
 set "VENV_ACTIVATE=%VENV_DIR%\Scripts\activate.bat"
 set "LOG_FILE=%PROJECT_DIR%\update_log.txt"
+set "TEMP_LOG=%TEMP%\update_log.txt"
 set "REPO_URL=https://github.com/davishalganatra/WhisperingVedas.git"
-set "COMMIT_MESSAGE=Complete Divyam Rishi Phase 2+ with all modules"
+set "COMMIT_MESSAGE=Complete Divyam Rishi Phase 2+ with all modules [%DATE% %TIME%]"
 
+:: Initialize temporary log if project directory is unavailable
+echo [%DATE% %TIME%] Starting Divyam Rishi Phase 2+ setup > "%TEMP_LOG%"
 
-:: Initialize log
-echo [%DATE% %TIME%] Starting Divyam Rishi Phase 2+ setup > "%LOG_FILE%"
-echo [%DATE% %TIME%] Project directory: %PROJECT_DIR% >> "%LOG_FILE%"
-echo Starting Divyam Rishi setup... Please wait.
+:: Check drive accessibility
+if not exist "D:\" (
+    echo [%DATE% %TIME%] ERROR: Drive D: not found >> "%TEMP_LOG%"
+    echo ERROR: Drive D: is not accessible
+    pause
+    exit /b 1
+)
 
 :: Check project directory
-if not exist "%PROJECT_DIR%" (
-    echo [%DATE% %TIME%] ERROR: Directory %PROJECT_DIR% not found >> "%LOG_FILE%"
+if not exist "%PROJECT_DIR%\." (
+    echo [%DATE% %TIME%] ERROR: Directory %PROJECT_DIR% not found >> "%TEMP_LOG%"
     echo ERROR: Project directory %PROJECT_DIR% does not exist
     echo Please create the directory and try again
     pause
     exit /b 1
 )
-echo [%DATE% %TIME%] Project directory exists >> "%LOG_FILE%"
+
+:: Check write permissions
+echo. > "%PROJECT_DIR%\test_write.txt" 2>nul && del "%PROJECT_DIR%\test_write.txt" 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] ERROR: No write permissions in %PROJECT_DIR% >> "%TEMP_LOG%"
+    echo ERROR: Cannot write to project directory
+    pause
+    exit /b 1
+)
+
+:: Initialize project log
+echo [%DATE% %TIME%] Starting Divyam Rishi Phase 2+ setup > "%LOG_FILE%"
+echo [%DATE% %TIME%] Project directory: %PROJECT_DIR% >> "%LOG_FILE%"
+echo Starting Divyam Rishi setup... Please wait.
 
 :: Change to project directory
 cd /d "%PROJECT_DIR%" || (
@@ -48,7 +68,7 @@ cd /d "%PROJECT_DIR%" || (
 )
 echo [%DATE% %TIME%] Changed to project directory >> "%LOG_FILE%"
 
-:: Check Python installation
+:: Check Python installation and version
 python --version >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] ERROR: Python is not installed or not in PATH >> "%LOG_FILE%"
@@ -56,8 +76,31 @@ if %ERRORLEVEL% neq 0 (
     pause
     exit /b 1
 )
-for /f "tokens=2 delims= " %%i in ('python --version') do set PYTHON_VERSION=%%i
-echo [%DATE% %TIME%] Python version: %PYTHON_VERSION% >> "%LOG_FILE%"
+for /F "tokens=2 delims= " %%i in ('python --version 2^>nul') do set "PYTHON_VERSION=%%i"
+if not defined PYTHON_VERSION (
+    echo [%DATE% %TIME%] ERROR: Failed to retrieve Python version >> "%LOG_FILE%"
+    echo ERROR: Could not determine Python version
+    pause
+    exit /b 1
+)
+:: Compare major.minor version (e.g., 3.8)
+for /F "tokens=1,2 delims=." %%a in ("!PYTHON_VERSION!") do (
+    set "PY_MAJOR=%%a"
+    set "PY_MINOR=%%b"
+)
+if !PY_MAJOR! lss 3 (
+    echo [%DATE% %TIME%] ERROR: Python version !PYTHON_VERSION! is too old. Requires 3.8+ >> "%LOG_FILE%"
+    echo ERROR: Python 3.8+ is required. Install from https://www.python.org
+    pause
+    exit /b 1
+)
+if !PY_MAJOR! equ 3 if !PY_MINOR! lss 8 (
+    echo [%DATE% %TIME%] ERROR: Python version !PYTHON_VERSION! is too old. Requires 3.8+ >> "%LOG_FILE%"
+    echo ERROR: Python 3.8+ is required. Install from https://www.python.org
+    pause
+    exit /b 1
+)
+echo [%DATE% %TIME%] Python version: !PYTHON_VERSION! >> "%LOG_FILE%"
 
 :: Check Git installation
 git --version >nul 2>&1
@@ -74,31 +117,58 @@ if not exist ".git" (
     echo [%DATE% %TIME%] Initializing Git repository >> "%LOG_FILE%"
     echo Initializing Git repository...
     git init >> "%LOG_FILE%" 2>&1
+    if %ERRORLEVEL% neq 0 (
+        echo [%DATE% %TIME%] ERROR: Failed to run git init >> "%LOG_FILE%"
+        echo ERROR: Could not initialize Git repository
+        pause
+        exit /b 1
+    )
     git remote add origin "%REPO_URL%" >> "%LOG_FILE%" 2>&1
     if %ERRORLEVEL% neq 0 (
-        echo [%DATE% %TIME%] ERROR: Failed to initialize Git repository >> "%LOG_FILE%"
-        echo ERROR: Could not initialize Git repository
+        echo [%DATE% %TIME%] ERROR: Failed to set remote origin >> "%LOG_FILE%"
+        echo ERROR: Could not set Git remote
         pause
         exit /b 1
     )
 )
 echo [%DATE% %TIME%] Git repository ready >> "%LOG_FILE%"
 
-:: Verify remote URL
-for /f %%i in ('git remote get-url origin 2^>nul') do set "CURRENT_URL=%%i"
-if not "!CURRENT_URL!"=="%REPO_URL%" (
+:: Verify and set remote URL
+set "CURRENT_URL="
+for /F "tokens=*" %%i in ('git remote get-url origin 2^>nul') do set "CURRENT_URL=%%i"
+if not defined CURRENT_URL (
+    echo [%DATE% %TIME%] WARNING: No remote URL found, setting to %REPO_URL% >> "%LOG_FILE%"
+    git remote add origin "%REPO_URL%" >> "%LOG_FILE%" 2>&1
+    if %ERRORLEVEL% neq 0 (
+        echo [%DATE% %TIME%] ERROR: Failed to set remote URL >> "%LOG_FILE%"
+        echo ERROR: Could not set Git remote URL
+        pause
+        exit /b 1
+    )
+) else if not "!CURRENT_URL!"=="%REPO_URL%" (
     echo [%DATE% %TIME%] WARNING: Remote URL is !CURRENT_URL!, setting to %REPO_URL% >> "%LOG_FILE%"
     git remote set-url origin "%REPO_URL%" >> "%LOG_FILE%" 2>&1
+    if %ERRORLEVEL% neq 0 (
+        echo [%DATE% %TIME%] ERROR: Failed to set remote URL >> "%LOG_FILE%"
+        echo ERROR: Could not set Git remote URL
+        pause
+        exit /b 1
+    )
 )
-echo [%DATE% %TIME%] Git remote URL: %REPO_URL% >> "%LOG_FILE%"
+for /F "tokens=*" %%i in ('git remote get-url origin 2^>nul') do set "CURRENT_URL=%%i"
+echo [%DATE% %TIME%] Git remote URL: !CURRENT_URL! >> "%LOG_FILE%"
 
-:: Check out the main branch if not already on it
+:: Checkout or create main branch
 git checkout main >> "%LOG_FILE%" 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [%DATE% %TIME%] ERROR: Failed to checkout main branch >> "%LOG_FILE%"
-    echo ERROR: Could not checkout to the main branch
-    pause
-    exit /b 1
+    echo [%DATE% %TIME%] WARNING: Main branch not found, creating main branch >> "%LOG_FILE%"
+    git checkout -b main >> "%LOG_FILE%" 2>&1
+    if %ERRORLEVEL% neq 0 (
+        echo [%DATE% %TIME%] ERROR: Failed to create or checkout main branch >> "%LOG_FILE%"
+        echo ERROR: Could not checkout to the main branch
+        pause
+        exit /b 1
+    )
 )
 echo [%DATE% %TIME%] Checked out to the main branch >> "%LOG_FILE%"
 
@@ -117,6 +187,12 @@ if not exist "%VENV_DIR%" (
 echo [%DATE% %TIME%] Virtual environment ready >> "%LOG_FILE%"
 
 :: Activate virtual environment
+if not exist "%VENV_ACTIVATE%" (
+    echo [%DATE% %TIME%] ERROR: Virtual environment activation script not found >> "%LOG_FILE%"
+    echo ERROR: Could not find %VENV_ACTIVATE%
+    pause
+    exit /b 1
+)
 call "%VENV_ACTIVATE%"
 if %ERRORLEVEL% neq 0 (
     echo [%DATE% %TIME%] ERROR: Failed to activate virtual environment >> "%LOG_FILE%"
@@ -124,29 +200,27 @@ if %ERRORLEVEL% neq 0 (
     pause
     exit /b 1
 )
+echo [%DATE% %TIME%] Virtual environment activated >> "%LOG_FILE%"
+
 :: Create requirements.txt
 echo [%DATE% %TIME%] Creating requirements.txt >> "%LOG_FILE%"
 echo Creating requirements.txt...
-
-(
-    echo fastapi
-    echo uvicorn
-    echo gradio
-    echo librosa
-    echo pydub
-    echo sentence-transformers
-    echo spacy
-    echo PyPDF2
-    echo speechrecognition
-    echo pocketsphinx
-    echo scikit-learn
-    echo pyttsx3
-    echo vosk
-    echo pillow
-    echo reportlab
-) > "%PROJECT_DIR%\requirements.txt"
-
-if %ERRORLEVEL% neq 0 (
+echo fastapi > "%PROJECT_DIR%\requirements.txt"
+echo uvicorn >> "%PROJECT_DIR%\requirements.txt"
+echo gradio >> "%PROJECT_DIR%\requirements.txt"
+echo librosa >> "%PROJECT_DIR%\requirements.txt"
+echo pydub >> "%PROJECT_DIR%\requirements.txt"
+echo sentence-transformers >> "%PROJECT_DIR%\requirements.txt"
+echo spacy >> "%PROJECT_DIR%\requirements.txt"
+echo PyPDF2 >> "%PROJECT_DIR%\requirements.txt"
+echo speechrecognition >> "%PROJECT_DIR%\requirements.txt"
+echo pocketsphinx >> "%PROJECT_DIR%\requirements.txt"
+echo scikit-learn >> "%PROJECT_DIR%\requirements.txt"
+echo pyttsx3 >> "%PROJECT_DIR%\requirements.txt"
+echo vosk >> "%PROJECT_DIR%\requirements.txt"
+echo pillow >> "%PROJECT_DIR%\requirements.txt"
+echo reportlab >> "%PROJECT_DIR%\requirements.txt"
+if not exist "%PROJECT_DIR%\requirements.txt" (
     echo [%DATE% %TIME%] ERROR: Failed to create requirements.txt >> "%LOG_FILE%"
     echo ERROR: Could not create requirements.txt
     pause
@@ -178,32 +252,54 @@ if %ERRORLEVEL% neq 0 (
 echo [%DATE% %TIME%] SpaCy model installed >> "%LOG_FILE%"
 
 :: Create directories
+echo [%DATE% %TIME%] Creating directories >> "%LOG_FILE%"
 mkdir "%MODULES_DIR%" "%INPUT_DIR%" "%SACRED_TEXTS_DIR%" "%USER_DIR%" "%VOICE_DIR%" "%LOG_DIR%" "%MEMORY_DIR%" "%KARMA_DIR%" "%WHISPER_DIR%" "%KNOWLEDGE_DIR%" "%KNOWLEDGE_PARSED%" "%KATHA_DIR%" "%YANTRA_DIR%" "%SANKALPA_DIR%" "%SADHANA_DIR%" 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] ERROR: Failed to create directories >> "%LOG_FILE%"
+    echo ERROR: Could not create required directories
+    pause
+    exit /b 1
+)
 echo [%DATE% %TIME%] Directories created >> "%LOG_FILE%"
 
 :: Create sample input files
+echo [%DATE% %TIME%] Creating sample input files >> "%LOG_FILE%"
 echo This text discusses heart chakra healing and peace through chanting Om Shanti. > "%INPUT_DIR%\sample.txt"
 echo Placeholder PDF content about spiritual growth and devotion. > "%INPUT_DIR%\sample.pdf"
 echo Placeholder audio chanting Om Shanti for meditation. > "%INPUT_DIR%\sample.wav"
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] ERROR: Failed to create sample input files >> "%LOG_FILE%"
+    echo ERROR: Could not create sample input files
+    pause
+    exit /b 1
+)
 echo [%DATE% %TIME%] Sample input files created in %INPUT_DIR% >> "%LOG_FILE%"
 
 :: Create sample katha JSON
+echo [%DATE% %TIME%] Creating sample katha JSON >> "%LOG_FILE%"
 echo {"title": "Katha on Forgiveness", "source": "Mahabharata", "shloka": "क्षमा धर्मः सनातनः", "meaning": "Forgiveness is eternal dharma", "story": "A sage forgave a wrongdoer, teaching compassion...", "takeaway": "Forgive to free your soul."} > "%KATHA_DIR%\forgiveness.json"
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] ERROR: Failed to create sample katha JSON >> "%LOG_FILE%"
+    echo ERROR: Could not create sample katha JSON
+    pause
+    exit /b 1
+)
 echo [%DATE% %TIME%] Sample katha JSON created in %KATHA_DIR% >> "%LOG_FILE%"
 
-
 :: Create sample knowledge files
-(
-    echo :: Vedic Wisdom on Peace
-    echo Chanting Om Shanti aligns the heart chakra, fostering inner peace and devotion.
-) > "%KNOWLEDGE_DIR%\peace.md"
-
+echo [%DATE% %TIME%] Creating sample knowledge files >> "%LOG_FILE%"
+echo # Vedic Wisdom on Peace > "%KNOWLEDGE_DIR%\peace.md"
+echo Chanting Om Shanti aligns the heart chakra, fostering inner peace and devotion. >> "%KNOWLEDGE_DIR%\peace.md"
+if %ERRORLEVEL% neq 0 (
+    echo [%DATE% %TIME%] ERROR: Failed to create sample knowledge files >> "%LOG_FILE%"
+    echo ERROR: Could not create sample knowledge files
+    pause
+    exit /b 1
+)
 echo [%DATE% %TIME%] Sample knowledge files created in %KNOWLEDGE_DIR% >> "%LOG_FILE%"
 
-:: Create modules (input_parser.py, nlp_processor.py, template_generator.py, etc.)
-:: Note: For brevity, only a few are shown here. All modules from the previous response are included.
-
-:: Create input_parser.py
+:: Create modules
+:: input_parser.py
 echo [%DATE% %TIME%] Creating input_parser.py >> "%LOG_FILE%"
 (
 echo import os
@@ -265,7 +361,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] input_parser.py created >> "%LOG_FILE%"
 
-:: Create nlp_processor.py
+:: nlp_processor.py
 echo [%DATE% %TIME%] Creating nlp_processor.py >> "%LOG_FILE%"
 (
 echo import spacy
@@ -339,7 +435,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] nlp_processor.py created >> "%LOG_FILE%"
 
-:: Create template_generator.py
+:: template_generator.py
 echo [%DATE% %TIME%] Creating template_generator.py >> "%LOG_FILE%"
 (
 echo import uuid
@@ -397,7 +493,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] template_generator.py created >> "%LOG_FILE%"
 
-:: Create chakra_energy_kpi.py
+:: chakra_energy_kpi.py
 echo [%DATE% %TIME%] Creating chakra_energy_kpi.py >> "%LOG_FILE%"
 (
 echo import json
@@ -444,7 +540,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] chakra_energy_kpi.py created >> "%LOG_FILE%"
 
-:: Create voice_analyzer.py
+:: voice_analyzer.py
 echo [%DATE% %TIME%] Creating voice_analyzer.py >> "%LOG_FILE%"
 (
 echo import librosa
@@ -495,7 +591,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] voice_analyzer.py created >> "%LOG_FILE%"
 
-:: Create auth.py
+:: auth.py
 echo [%DATE% %TIME%] Creating auth.py >> "%LOG_FILE%"
 (
 echo import json
@@ -555,7 +651,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] auth.py created >> "%LOG_FILE%"
 
-:: Create usage_tracker.py
+:: usage_tracker.py
 echo [%DATE% %TIME%] Creating usage_tracker.py >> "%LOG_FILE%"
 (
 echo import json
@@ -587,7 +683,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] usage_tracker.py created >> "%LOG_FILE%"
 
-:: Create markdown_knowledge_base.py
+:: markdown_knowledge_base.py
 echo [%DATE% %TIME%] Creating markdown_knowledge_base.py >> "%LOG_FILE%"
 (
 echo import os
@@ -624,7 +720,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] markdown_knowledge_base.py created >> "%LOG_FILE%"
 
-:: Create admin_console.py
+:: admin_console.py
 echo [%DATE% %TIME%] Creating admin_console.py >> "%LOG_FILE%"
 (
 echo import gradio as gr
@@ -654,7 +750,7 @@ echo     def launch(self, password: str):
 echo         if password != "sacred_rishi":
 echo             return "Access denied"
 echo         with gr.Blocks() as demo:
-echo             gr.Markdown(":: Divyam Rishi Admin Console")
+echo             gr.Markdown("# Divyam Rishi Admin Console")
 echo             user_id = gr.Textbox(label="User ID")
 echo             log_btn = gr.Button("View Logs")
 echo             memory_btn = gr.Button("View Memory")
@@ -671,7 +767,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] admin_console.py created >> "%LOG_FILE%"
 
-:: Create memory_reflector.py
+:: memory_reflector.py
 echo [%DATE% %TIME%] Creating memory_reflector.py >> "%LOG_FILE%"
 (
 echo import json
@@ -716,7 +812,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] memory_reflector.py created >> "%LOG_FILE%"
 
-:: Create rishi_personality.py
+:: rishi_personality.py
 echo [%DATE% %TIME%] Creating rishi_personality.py >> "%LOG_FILE%"
 (
 echo from typing import Dict
@@ -741,7 +837,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] rishi_personality.py created >> "%LOG_FILE%"
 
-:: Create rishi_whisper_logs.py
+:: rishi_whisper_logs.py
 echo [%DATE% %TIME%] Creating rishi_whisper_logs.py >> "%LOG_FILE%"
 (
 echo import json
@@ -776,7 +872,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] rishi_whisper_logs.py created >> "%LOG_FILE%"
 
-:: Create daily_digest_scheduler.py
+:: daily_digest_scheduler.py
 echo [%DATE% %TIME%] Creating daily_digest_scheduler.py >> "%LOG_FILE%"
 (
 echo import json
@@ -814,7 +910,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] daily_digest_scheduler.py created >> "%LOG_FILE%"
 
-:: Create offline_embedding_engine.py
+:: offline_embedding_engine.py
 echo [%DATE% %TIME%] Creating offline_embedding_engine.py >> "%LOG_FILE%"
 (
 echo from sentence_transformers import SentenceTransformer
@@ -849,7 +945,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] offline_embedding_engine.py created >> "%LOG_FILE%"
 
-:: Create chat_memory_vector_store.py
+:: chat_memory_vector_store.py
 echo [%DATE% %TIME%] Creating chat_memory_vector_store.py >> "%LOG_FILE%"
 (
 echo from sentence_transformers import SentenceTransformer
@@ -886,7 +982,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] chat_memory_vector_store.py created >> "%LOG_FILE%"
 
-:: Create karmic_reflection_engine.py
+:: karmic_reflection_engine.py
 echo [%DATE% %TIME%] Creating karmic_reflection_engine.py >> "%LOG_FILE%"
 (
 echo import json
@@ -924,7 +1020,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] karmic_reflection_engine.py created >> "%LOG_FILE%"
 
-:: Create vedic_calendar_awareness.py
+:: vedic_calendar_awareness.py
 echo [%DATE% %TIME%] Creating vedic_calendar_awareness.py >> "%LOG_FILE%"
 (
 echo import json
@@ -946,7 +1042,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] vedic_calendar_awareness.py created >> "%LOG_FILE%"
 
-:: Create personalized_yantra_generator.py
+:: personalized_yantra_generator.py
 echo [%DATE% %TIME%] Creating personalized_yantra_generator.py >> "%LOG_FILE%"
 (
 echo from PIL import Image, ImageDraw, ImageFont
@@ -974,7 +1070,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] personalized_yantra_generator.py created >> "%LOG_FILE%"
 
-:: Create offline_sankalpa_journal.py
+:: offline_sankalpa_journal.py
 echo [%DATE% %TIME%] Creating offline_sankalpa_journal.py >> "%LOG_FILE%"
 (
 echo import json
@@ -1009,7 +1105,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] offline_sankalpa_journal.py created >> "%LOG_FILE%"
 
-:: Create rishi_voice_avatar.py
+:: rishi_voice_avatar.py
 echo [%DATE% %TIME%] Creating rishi_voice_avatar.py >> "%LOG_FILE%"
 (
 echo import pyttsx3
@@ -1030,7 +1126,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] rishi_voice_avatar.py created >> "%LOG_FILE%"
 
-:: Create divine_mode_voice_only.py
+:: divine_mode_voice_only.py
 echo [%DATE% %TIME%] Creating divine_mode_voice_only.py >> "%LOG_FILE%"
 (
 echo from vosk import Model, KaldiRecognizer
@@ -1068,7 +1164,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] divine_mode_voice_only.py created >> "%LOG_FILE%"
 
-:: Create bhagavad_gita_explorer.py
+:: bhagavad_gita_explorer.py
 echo [%DATE% %TIME%] Creating bhagavad_gita_explorer.py >> "%LOG_FILE%"
 (
 echo import json
@@ -1095,7 +1191,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] bhagavad_gita_explorer.py created >> "%LOG_FILE%"
 
-:: Create rishi_satsang_mode.py
+:: rishi_satsang_mode.py
 echo [%DATE% %TIME%] Creating rishi_satsang_mode.py >> "%LOG_FILE%"
 (
 echo import json
@@ -1130,7 +1226,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] rishi_satsang_mode.py created >> "%LOG_FILE%"
 
-:: Create personal_mantra_composer.py
+:: personal_mantra_composer.py
 echo [%DATE% %TIME%] Creating personal_mantra_composer.py >> "%LOG_FILE%"
 (
 echo from typing import Dict
@@ -1149,7 +1245,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] personal_mantra_composer.py created >> "%LOG_FILE%"
 
-:: Create sadhana_book_creator.py
+:: sadhana_book_creator.py
 echo [%DATE% %TIME%] Creating sadhana_book_creator.py >> "%LOG_FILE%"
 (
 echo from reportlab.lib.pagesizes import letter
@@ -1180,7 +1276,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] sadhana_book_creator.py created >> "%LOG_FILE%"
 
-:: Create gradio_ui_dynamic.py
+:: gradio_ui_dynamic.py
 echo [%DATE% %TIME%] Creating gradio_ui_dynamic.py >> "%LOG_FILE%"
 (
 echo import gradio as gr
@@ -1207,7 +1303,7 @@ echo         return self.personality.respond(query, context)
 echo.
 echo     def launch_ui(self):
 echo         with gr.Blocks() as demo:
-echo             gr.Markdown(":: Divyam Rishi: Whispering Vedas")
+echo             gr.Markdown("# Divyam Rishi: Whispering Vedas")
 echo             query = gr.Textbox(label="Your Spiritual Query")
 echo             output = gr.Textbox(label="Guidance")
 echo             submit = gr.Button("Seek Wisdom")
@@ -1222,7 +1318,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] gradio_ui_dynamic.py created >> "%LOG_FILE%"
 
-:: Create katha_engine.py
+:: katha_engine.py
 echo [%DATE% %TIME%] Creating katha_engine.py >> "%LOG_FILE%"
 (
 echo import json
@@ -1255,7 +1351,7 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [%DATE% %TIME%] katha_engine.py created >> "%LOG_FILE%"
 
-:: Create main.py
+:: main.py
 echo [%DATE% %TIME%] Creating main.py >> "%LOG_FILE%"
 (
 echo from fastapi import FastAPI, HTTPException, Depends
@@ -1463,40 +1559,7 @@ echo Committing changes to Git...
 git add . >> "%LOG_FILE%" 2>&1
 git commit -m "%COMMIT_MESSAGE%" >> "%LOG_FILE%" 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [%DATE% %TIME%] ERROR: Git commit failed >> "%LOG_FILE%"
-    echo ERROR: Git commit failed. Check if there are changes to commit
-)
-echo [%DATE% %TIME%] Git commit completed >> "%LOG_FILE%"
-
-:: Push to GitHub
-echo [%DATE% %TIME%] Pushing to GitHub >> "%LOG_FILE%"
-echo Pushing to GitHub...
-git push origin main >> "%LOG_FILE%" 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [%DATE% %TIME%] ERROR: Git push failed >> "%LOG_FILE%"
-    echo ERROR: Git push failed. Check credentials or network
-    pause
-    exit /b 1
-)
-echo [%DATE% %TIME%] Git push completed >> "%LOG_FILE%"
-
-:: Launch FastAPI app
-echo [%DATE% %TIME%] Launching FastAPI app >> "%LOG_FILE%"
-echo Launching Divyam Rishi FastAPI app...
-start /b uvicorn main:app --host 0.0.0.0 --port 8000 >> "%LOG_FILE%" 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo [%DATE% %TIME%] ERROR: Failed to launch FastAPI app >> "%LOG_FILE%"
-    echo ERROR: Could not launch FastAPI app
-    pause
-    exit /b 1
-)
-echo [%DATE% %TIME%] FastAPI app launched >> "%LOG_FILE%"
-
-:: Completion message
-echo [%DATE% %TIME%] Divyam Rishi setup completed successfully >> "%LOG_FILE%"
-echo Setup completed successfully!
-echo FastAPI app is running at http://localhost:8000
-echo Gradio UI is running at http://localhost:7860
-echo Admin console is running at http://localhost:7861 (password: sacred_rishi)
-echo Check %LOG_FILE% for details
-pause
+    echo [%DATE% %TIME%] WARNING: Git commit failed, possibly no changes to commit >> "%LOG_FILE%"
+    echo WARNING: Git commit failed. Check if there are changes to commit
+) else (
+    echo [%DATE% %TIME%] Git commit completed >> "%LOG_FILE

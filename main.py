@@ -1,198 +1,163 @@
-from fastapi import FastAPI, HTTPException, Security, Depends, Request
-from fastapi.security import APIKeyHeader
-from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
-from starlette.status import HTTP_403_FORBIDDEN
-import os
-import time
-import json
-import re
-from modules.mantra_suggestion import suggest_mantra
-from modules.chant_generation import generate_chant, play_chant
-from modules.akashic_logger import log_chant_action, get_user_logs
-from modules.tap_sadhana_scheduler import schedule_tapasya, remove_tapasya
-from modules.user_profiles import create_user_profile, get_user_profile, UserProfile
-from modules.event_logging import log_event
-from modules.tap_sadhana import start_tap_sadhana
-from modules.voice_feedback import process_voice_feedback
 import logging
+from datetime import datetime
+import tempfile
+import os
+from modules.voice_analyzer import VoiceAnalyzer
+import gradio as gr
+import time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MCP Server - Whispering Vedas", version="1.0.0")
+app = FastAPI(title="MCP Server - Whispering Vedas")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3001", "http://localhost:8000", "http://localhost:7860"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+API_KEY = "mcp-secret-key"
 
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
-async def verify_api_key(request: Request, api_key: str = Security(api_key_header)):
-    auth_header = request.headers.get("Authorization")
-    bearer_token = None
-    if auth_header and auth_header.startswith("Bearer "):
-        bearer_token = auth_header.replace("Bearer ", "")
-    if api_key == "mcp-secret-key" or bearer_token == "mcp-secret-key":
-        return True
-    raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="Invalid API key")
-
-def load_vedic_knowledge():
-    try:
-        with open("data/vedic_knowledge/vedic_knowledge.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load vedic_knowledge.json: {str(e)}")
-        return {
-            "texts": [
-                {
-                    "name": "Default",
-                    "sections": [
-                        {
-                            "name": "Default",
-                            "verses": [
-                                {
-                                    "id": "default_0",
-                                    "text": "Om Namah Shivaya",
-                                    "translation": "Universal chant",
-                                    "emotion": [],
-                                    "goal": [],
-                                    "chakra": None,
-                                    "mantra": "Om Namah Shivaya",
-                                    "frequency": 432.0,
-                                    "tone": "G",
-                                    "repetitions": 108
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        }
+def verify_api_key(x_api_key: str):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
+    return x_api_key
 
 class MantraRequest(BaseModel):
+    user_id: str
     emotion: str
     goal: str
     chakra: Optional[str] = None
-    user_id: Optional[str] = None
-    astrological_context: Optional[str] = None  # Placeholder for future use
+    astrological_context: Optional[str] = None
 
 class TapSadhanaRequest(BaseModel):
     user_id: str
     schedule_name: str
     mantra: str
     repetitions: int
-    time_of_day: str = "06:00"
+    time_of_day: str
 
-class UserProfileRequest(BaseModel):
-    user_id: str
-    name: str
-    goals: Optional[List[str]] = None
-    chakra_focus: Optional[str] = None
-    healing_preferences: Optional[List[str]] = None
-    preferred_tone: Optional[str] = "G"
-
-class EventLogRequest(BaseModel):
+class EventLog(BaseModel):
     user_id: str
     mantra: str
     vibration_level: float
     emotional_state: str
+    timestamp: Optional[float] = None
+    context: Optional[str] = "manual"
+    repetitions: Optional[int] = 108
 
-class VoiceFeedbackRequest(BaseModel):
-    user_id: str
-    audio_path: str
+class UserLog(BaseModel):
+    timestamp: float
+    mantra: str
+    repetitions: int
+    context: str
+    emotional_state: str
 
-@app.get("/v1")
-async def root():
-    return {
-        "message": "Welcome to MCP Server - Whispering Vedas API.",
-        "usage": "Use POST /suggest_mantra, /start_tap_sadhana, /log_event, /process_voice_feedback, etc."
-    }
+# Simulated storage
+user_logs = []
 
 @app.post("/suggest_mantra")
-async def suggest_mantra_endpoint(request: MantraRequest, authorized: bool = Depends(verify_api_key)):
-    mantra_response = suggest_mantra(
-        emotion=request.emotion,
-        goal=request.goal,
-        chakra=request.chakra,
-        user_id=request.user_id
-    )
-    # Log the suggestion as an event
-    log_event(
-        user_id=request.user_id or "user123",
-        mantra=mantra_response["mantra"],
-        vibration_level=mantra_response["frequency"] / 60.0,  # Simplified conversion
-        emotional_state=request.emotion or "calm"
-    )
-    logger.info(f"Suggested mantra for user {request.user_id}: {mantra_response['mantra']}")
-    return mantra_response
-
-@app.post("/generate_chant")
-async def generate_chant_endpoint(mantra: str, frequency: float, tone: str, authorized: bool = Depends(verify_api_key)):
-    audio_path = await generate_chant(mantra, frequency, tone)
-    return {"audio_path": audio_path}
-
-@app.post("/play_chant")
-async def play_chant_endpoint(audio_path: str, authorized: bool = Depends(verify_api_key)):
-    result = await play_chant(audio_path)
-    return {"message": result}
-
-@app.post("/log_event")
-async def log_event_endpoint(request: EventLogRequest, authorized: bool = Depends(verify_api_key)):
-    result = log_event(
-        user_id=request.user_id,
-        mantra=request.mantra,
-        vibration_level=request.vibration_level,
-        emotional_state=request.emotional_state
-    )
-    logger.info(f"Logged event for user {request.user_id}: {request.mantra}")
-    return result
+async def suggest_mantra(request: MantraRequest, api_key: str = Depends(verify_api_key)):
+    logger.info(f"Received /suggest_mantra request: {request.dict()}")
+    try:
+        response = {
+            "mantra": "Om Shanti",
+            "frequency": 432.0,
+            "tone": "calm",
+            "repetitions": 108,
+            "text": "Om Shanti",
+            "translation": "Peace"
+        }
+        return response
+    except Exception as e:
+        logger.error(f"Error in /suggest_mantra: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/start_tap_sadhana")
-async def start_tap_sadhana_endpoint(request: TapSadhanaRequest, authorized: bool = Depends(verify_api_key)):
-    result = schedule_tapasya(
-        user_id=request.user_id,
-        schedule_name=request.schedule_name,
-        mantra=request.mantra,
-        repetitions=request.repetitions,
-        time_of_day=request.time_of_day
-    )
-    logger.info(f"Scheduled tapasya for user {request.user_id}: {request.schedule_name}")
-    return result
+async def start_tap_sadhana(request: TapSadhanaRequest, api_key: str = Depends(verify_api_key)):
+    logger.info(f"Received /start_tap_sadhana request: {request.dict()}")
+    try:
+        response = {
+            "message": f"Tapasya '{request.schedule_name}' started with mantra '{request.mantra}'"
+        }
+        return response
+    except Exception as e:
+        logger.error(f"Error in /start_tap_sadhana: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/create_user_profile")
-async def create_user_profile_endpoint(request: UserProfileRequest, authorized: bool = Depends(verify_api_key)):
-    result = create_user_profile(
-        user_id=request.user_id,
-        name=request.name,
-        goals=request.goals,
-        chakra_focus=request.chakra_focus,
-        healing_preferences=request.healing_preferences,
-        preferred_tone=request.preferred_tone
-    )
-    logger.info(f"Created profile for user {request.user_id}")
-    return result
+@app.post("/log_event")
+async def log_event(event: EventLog, api_key: str = Depends(verify_api_key)):
+    logger.info(f"Received /log_event request: {event.dict()}")
+    try:
+        event_dict = event.dict()
+        event_dict["timestamp"] = datetime.now().timestamp()
+        user_logs.append(event_dict)
+        return {"message": "Event logged successfully"}
+    except Exception as e:
+        logger.error(f"Error in /log_event: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/get_user_logs/{user_id}")
-async def get_user_logs_endpoint(user_id: str, authorized: bool = Depends(verify_api_key)):
-    logs = get_user_logs(user_id)
-    logger.info(f"Fetched logs for user {user_id}")
-    return logs
+async def get_user_logs(user_id: str, api_key: str = Depends(verify_api_key)):
+    logger.info(f"Received /get_user_logs request for user_id: {user_id}")
+    try:
+        logs = [log for log in user_logs if log["user_id"] == user_id]
+        return logs
+    except Exception as e:
+        logger.error(f"Error in /get_user_logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process_voice_feedback")
-async def process_voice_feedback_endpoint(request: VoiceFeedbackRequest, authorized: bool = Depends(verify_api_key)):
-    kpis = process_voice_feedback(
-        user_id=request.user_id,
-        audio_path=request.audio_path
-    )
-    logger.info(f"Processed voice feedback for user {request.user_id}")
-    return kpis
-    
+async def process_voice_feedback(
+    user_id: str = Form(...),
+    file: UploadFile = File(...),
+    api_key: str = Depends(verify_api_key)
+):
+    logger.info(f"Received /process_voice_feedback request for user_id: {user_id}")
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_file.write(await file.read())
+            temp_file_path = temp_file.name
+
+        voice_analyzer = VoiceAnalyzer(use_transcription=False)
+        result = voice_analyzer.process_voice(temp_file_path)
+
+        # ✅ Windows-safe file deletion
+        import time
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                os.unlink(temp_file_path)
+                break
+            except PermissionError:
+                if attempt < attempts - 1:
+                    time.sleep(1)
+                else:
+                    logger.warning(f"Could not delete temp file after {attempts} attempts: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Unexpected error deleting file: {e}")
+                break
+
+        # ✅ Handle analysis errors properly
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in /process_voice_feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/launch_ui")
+async def launch_ui():
+    logger.info("Received /launch_ui request")
+    try:
+        from modules.gradio_ui_dynamic import main as launch_gradio
+        launch_gradio()
+        return {"message": "Gradio UI launched"}
+    except Exception as e:
+        logger.error(f"Error launching UI: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    logger.info("Starting FastAPI server on http://0.0.0.0:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

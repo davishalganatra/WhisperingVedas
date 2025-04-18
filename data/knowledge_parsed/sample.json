@@ -1,0 +1,22 @@
+{
+  "verses": [
+    {
+      "id": "a4a4208c-f0d2-4e68-b740-91bbfd68ceb3",
+      "source": "TXT_Source",
+      "text": "This text discusses heart chakra healing and peace through chanting Om Shanti.",
+      "translation": "This text discusses heart chakra healing and peace through chanting Om Shanti.",
+      "emotion": [
+        "peace"
+      ],
+      "goal": [
+        "healing"
+      ],
+      "chakra": "heart",
+      "mantra": "om",
+      "frequency": 528.0,
+      "tone": "F",
+      "repetitions": 54,
+      "context": "sample.txt"
+    }
+  ]
+}

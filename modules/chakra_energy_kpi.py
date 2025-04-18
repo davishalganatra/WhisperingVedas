@@ -19,15 +19,13 @@ class ChakraEnergyKPI:
         entities = self.nlp.extract_entities(text)
         chakra = entities.get("chakra")[0] if entities.get("chakra") else "heart"
         emotion = entities.get("emotion")[0] if entities.get("emotion") else "peace"
-        
-        # Calculate vibrational score (simple heuristic)
+
         vib_score = self.chakra_map[chakra]["frequency"]
         if mantra and "om" in mantra.lower():
-            vib_score += 10.0  # Boost for sacred syllables
-        
-        # Emotional resonance
+            vib_score += 10.0
+
         resonance = 0.8 if emotion in self.chakra_map[chakra]["emotions"] else 0.5
-        
+
         return {
             "chakra": chakra,
             "vibrational_score": vib_score,

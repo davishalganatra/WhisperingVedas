@@ -5,6 +5,9 @@ import os
 import re
 from datetime import datetime
 import logging
+import tempfile
+from pathlib import Path
+from pydub import AudioSegment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -12,16 +15,25 @@ logger = logging.getLogger(__name__)
 BASE_URL = "http://localhost:8000"
 API_KEY = "mcp-secret-key"
 
-async def query_mcp_server(endpoint: str, payload: dict):
+async def query_mcp_server(endpoint: str, payload: dict = None, files: dict = None):
     """Make a POST request to MCP Server."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            logger.info(f"Querying {BASE_URL}/{endpoint} with payload: {payload}")
-            response = await client.post(
-                f"{BASE_URL}/{endpoint}",
-                json=payload,
-                headers={"X-API-Key": API_KEY}
-            )
+            logger.info(f"Querying {BASE_URL}/{endpoint} with payload: {payload}, files: {files}")
+            headers = {"X-API-Key": API_KEY}
+            if files:
+                response = await client.post(
+                    f"{BASE_URL}/{endpoint}",
+                    data=payload,
+                    files=files,
+                    headers=headers
+                )
+            else:
+                response = await client.post(
+                    f"{BASE_URL}/{endpoint}",
+                    json=payload,
+                    headers=headers
+                )
             response.raise_for_status()
             logger.info(f"Response from {endpoint}: {response.json()}")
             return response.json()
@@ -29,9 +41,9 @@ async def query_mcp_server(endpoint: str, payload: dict):
             logger.error(f"Failed to query {endpoint}: {str(e)}")
             return {"error": f"Failed to query {endpoint}: {str(e)}"}
 
-def parse_user_query(query: str):
+def parse_user_query(query: str, audio_file: str = None):
     """Parse user query to extract intent and parameters using rule-based NLP."""
-    query = query.lower().strip()
+    query = query.lower().strip() if query else ""
 
     intents = {
         "suggest_mantra": ["suggest", "mantra", "help", "recommend"],
@@ -50,86 +62,102 @@ def parse_user_query(query: str):
         "chakra": None,
         "user_id": "user123",
         "context": "manual",
-        "audio_path": None,
-        "astrological_context": "neutral"  # Placeholder for future use
+        "audio_path": audio_file,
+        "astrological_context": "neutral",
+        "schedule_name": "daily_vedic",
+        "mantra": "Om Namah Shivaya",
+        "repetitions": 108,
+        "time_of_day": "06:00",
+        "vibration_level": 7.5,
+        "emotional_state": "peaceful"
     }
 
-    for intent, keywords in intents.items():
-        if any(keyword in query for keyword in keywords):
-            result["intent"] = intent
-            break
+    # Prioritize voice_feedback if audio file is provided
+    if audio_file:
+        result["intent"] = "voice_feedback"
+        result["emotional_state"] = "neutral"
+    else:
+        for intent, keywords in intents.items():
+            if any(keyword in query for keyword in keywords):
+                result["intent"] = intent
+                break
 
-    for word in query.split():
-        if word in emotions:
-            result["emotion"] = word
-        if word in goals:
-            result["goal"] = word
-        if word in chakras:
-            result["chakra"] = word
+        for word in query.split():
+            if word in emotions:
+                result["emotion"] = word
+            if word in goals:
+                result["goal"] = word
+            if word in chakras:
+                result["chakra"] = word
 
-    if "start" in query and "tapasya" in query:
-        result["intent"] = "start_tap_sadhana"
-        result["schedule_name"] = "daily_vedic"
-        result["mantra"] = "Om Namah Shivaya"
-        result["repetitions"] = 108
-        result["time_of_day"] = "06:00"
-        if "mantra" in query:
-            match = re.search(r"mantra\s+(.+?)(?:\s|$)", query)
+        if result["intent"] == "start_tap_sadhana":
+            # Extract mantra
+            match = re.search(r"with\s+(.+?)(?:\s+\d+|$)", query)
             if match:
-                result["mantra"] = match.group(1)
-        if "repetitions" in query:
-            match = re.search(r"repetitions\s+(\d+)", query)
+                result["mantra"] = match.group(1).strip()
+            # Extract repetitions
+            match = re.search(r"(\d+)\s+repetitions", query)
             if match:
-                result["repetitions"] = int(match.group(1))
-        if "at" in query:
+                try:
+                    result["repetitions"] = int(match.group(1))
+                except ValueError:
+                    result["repetitions"] = 108
+            # Extract time
             match = re.search(r"at\s+(\d{2}:\d{2})", query)
             if match:
                 result["time_of_day"] = match.group(1)
+            result["schedule_name"] = "daily_vedic"
 
-    if "log" in query or "chant" in query:
-        result["intent"] = "log_event"
-        result["mantra"] = "Om Namah Shivaya"
-        result["vibration_level"] = 7.5
-        result["emotional_state"] = result["emotion"] or "peaceful"
-        if "mantra" in query:
-            match = re.search(r"mantra\s+(.+?)(?:\s|$)", query)
+        if result["intent"] == "log_event":
+            match = re.search(r"chant\s+(.+?)(?:\s|$)", query)
             if match:
-                result["mantra"] = match.group(1)
+                result["mantra"] = match.group(1).strip()
+            result["emotional_state"] = result["emotion"] or "peaceful"
 
-    if "voice" in query or "feedback" in query:
-        result["intent"] = "voice_feedback"
-        result["audio_path"] = "data/chants/user_feedback.wav"  # Placeholder
-        result["emotional_state"] = result["emotion"] or "neutral"
+        if not result["intent"]:
+            result["intent"] = "suggest_mantra"
 
-    if not result["intent"]:
-        result["intent"] = "suggest_mantra"
-
-    logger.info(f"Parsed query '{query}' to: {result}")
+    logger.info(f"Parsed query '{query}' with audio '{audio_file}' to: {result}")
     return result
 
-async def process_query(query: str):
+async def process_query(query: str, audio_file: str = None):
     """Process user query and fetch response from MCP Server."""
-    parsed = parse_user_query(query)
+    if audio_file:
+        file_path = Path(audio_file)
+        temp_wav = None
+        if file_path.suffix.lower() == ".mp3":
+            try:
+                temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                audio = AudioSegment.from_mp3(audio_file)
+                audio.export(temp_wav, format="wav")
+                audio_file = temp_wav
+                logger.info(f"Converted MP3 to WAV: {audio_file}")
+            except Exception as e:
+                return f"Error converting MP3 to WAV: {str(e)}", []
+        elif file_path.suffix.lower() != ".wav":
+            return "Error: Please upload a WAV or MP3 file.", []
+    
+    parsed = parse_user_query(query, audio_file)
     intent = parsed["intent"]
     user_id = parsed["user_id"]
 
     if intent == "suggest_mantra":
         payload = {
+            "user_id": user_id,
             "emotion": parsed["emotion"] or "calm",
             "goal": parsed["goal"] or "clarity",
             "chakra": parsed["chakra"],
-            "user_id": user_id,
             "astrological_context": parsed["astrological_context"]
         }
+        logger.debug(f"Sending payload to /suggest_mantra: {payload}")
         response = await query_mcp_server("suggest_mantra", payload)
         if "error" in response:
             return response["error"], []
         mantra_response = response
-        # Log the suggestion as an event
         event_payload = {
             "user_id": user_id,
             "mantra": mantra_response["mantra"],
-            "vibration_level": mantra_response["frequency"] / 60.0,  # Simplified conversion
+            "vibration_level": mantra_response["frequency"] / 60.0,
             "emotional_state": parsed["emotion"] or "calm"
         }
         await query_mcp_server("log_event", event_payload)
@@ -155,9 +183,10 @@ async def process_query(query: str):
             "user_id": user_id,
             "schedule_name": parsed["schedule_name"],
             "mantra": parsed["mantra"],
-            "repetitions": parsed["repetitions"],
+            "repetitions": int(parsed["repetitions"]),
             "time_of_day": parsed["time_of_day"]
         }
+        logger.debug(f"Sending payload to /start_tap_sadhana: {payload}")
         response = await query_mcp_server("start_tap_sadhana", payload)
         if "error" in response:
             return response["error"], []
@@ -177,6 +206,7 @@ async def process_query(query: str):
             "vibration_level": parsed["vibration_level"],
             "emotional_state": parsed["emotional_state"]
         }
+        logger.debug(f"Sending payload to /log_event: {payload}")
         response = await query_mcp_server("log_event", payload)
         if "error" in response:
             return response["error"], []
@@ -189,20 +219,29 @@ async def process_query(query: str):
         ]
         return "Event logged successfully", logs_display
 
-    elif intent == "voice_feedback":
-        payload = {
-            "user_id": user_id,
-            "audio_path": parsed["audio_path"]
-        }
-        response = await query_mcp_server("process_voice_feedback", payload)
+    elif intent == "voice_feedback" and audio_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            with open(audio_file, "rb") as f:
+                temp_file.write(f.read())
+            temp_file_path = temp_file.name
+        
+        files = {"file": (os.path.basename(temp_file_path), open(temp_file_path, "rb"), "audio/wav")}
+        payload = {"user_id": user_id}
+        logger.debug(f"Sending payload to /process_voice_feedback: {payload}, files: {files}")
+        response = await query_mcp_server("process_voice_feedback", payload, files)
+        
+        os.unlink(temp_file_path)
+        if temp_wav:
+            os.unlink(temp_wav)
+        
         if "error" in response:
             return response["error"], []
-        # Log the feedback as an event
+        
         event_payload = {
             "user_id": user_id,
             "mantra": "Voice Feedback",
             "vibration_level": response.get("energy_level", 0.0),
-            "emotional_state": parsed["emotional_state"]
+            "emotional_state": parsed["emotional_state"] or "neutral"
         }
         await query_mcp_server("log_event", event_payload)
         logs = await query_mcp_server(f"get_user_logs/{user_id}", {})
@@ -220,24 +259,42 @@ async def process_query(query: str):
             logs_display
         )
 
-    return "Unknown intent", []
+    return "Please provide a valid query or audio input", []
 
 def main():
     """Launch Gradio interface."""
     with gr.Blocks(title="Divyam Rishi - Whispering Vedas") as demo:
-        gr.Markdown("# Divyam Rishi - Your Spiritual Assistant")
-        query_input = gr.Textbox(label="Enter your query (e.g., 'I feel heavy, help my heart chakra' or 'Process voice feedback')")
+        gr.Markdown("""
+        # Divyam Rishi - Your Spiritual Assistant
+        Welcome to **Whispering Vedas**, an AI-powered platform to guide your Vedic chanting and spiritual journey. 
+        Divyam Rishi helps you:
+        - **Discover Mantras**: Get personalized mantra suggestions based on your emotions and goals (e.g., "I feel heavy, suggest a mantra for my heart chakra").
+        - **Schedule Tapasya**: Plan daily chanting practices (e.g., "Start tapasya with Om Namah Shivaya 108 repetitions at 06:00").
+        - **Log Chanting**: Record your chanting sessions (e.g., "Log chant Om Namah Shivaya").
+        - **Analyze Voice**: Upload a WAV or MP3 file of your chant to analyze its energy and clarity (e.g., "Process voice feedback" with an audio upload).
+
+        **How to Use**:
+        - Enter a query in the textbox below, such as:
+          - "Suggest a mantra for peace"
+          - "Start tapasya with Om Shanti 54 repetitions at 07:00"
+          - "Process voice feedback" (with a WAV or MP3 file)
+        - Upload a WAV or MP3 file for voice analysis.
+        - Click **Submit** to see the response and recent logs.
+        """)
+        with gr.Row():
+            query_input = gr.Textbox(label="Enter your query (e.g., 'Start tapasya with Om Namah Shivaya 108 repetitions at 06:00')")
+            audio_input = gr.Audio(sources=["upload"], type="filepath", label="Upload Voice Input (WAV or MP3)")
         submit_button = gr.Button("Submit")
         response_output = gr.Textbox(label="Response", lines=10)
         logs_output = gr.Textbox(label="Recent Logs", lines=5)
 
         submit_button.click(
             fn=process_query,
-            inputs=query_input,
+            inputs=[query_input, audio_input],
             outputs=[response_output, logs_output]
         )
 
-    demo.launch(server_name="0.0.0.0", server_port=7860) #pledged to the heart of the cosmos)
+    demo.launch(server_name="0.0.0.0", server_port=7860)
 
 if __name__ == "__main__":
     main()

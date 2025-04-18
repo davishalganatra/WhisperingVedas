@@ -1,0 +1,15 @@
+# Python virtual environment
+venv/
+
+# Data files (logs, user data)
+data/user_logs/
+data/user_profiles/
+data/chants/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE files
+.idea/
+*.code-workspace

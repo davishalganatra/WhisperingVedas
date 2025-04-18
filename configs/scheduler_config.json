@@ -1,0 +1,14 @@
+{ 
+  "schedules": { 
+    "daily_vedic": [ 
+      { 
+        "mantra": "Gayatri Mantra", 
+        "cron": "0 6 * * *" 
+      }, 
+      { 
+        "mantra": "Hanuman Chalisa", 
+        "cron": "0 15 * * *" 
+      } 
+    ] 
+  } 
+} 

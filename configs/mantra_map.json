@@ -1,0 +1,22 @@
+{ 
+  "mantras": [ 
+    { 
+      "mantra": "Om Namah Shivaya", 
+      "emotions": ["calm", "peace"], 
+      "goals": ["clarity", "liberation"], 
+      "chakra": "third_eye", 
+      "frequency": 432.0, 
+      "tone": "G", 
+      "repetitions": 108 
+    }, 
+    { 
+      "mantra": "Om Mani Padme Hum", 
+      "emotions": ["compassion", "love"], 
+      "goals": ["healing", "connection"], 
+      "chakra": "heart", 
+      "frequency": 528.0, 
+      "tone": "F", 
+      "repetitions": 108 
+    } 
+  ] 
+} 
